@@ -22,7 +22,6 @@ export function filterGeneric(output: string): string {
 	if (lines.length > 1 && /^\s*Filesystem\s+/.test(lines[0])) {
 		const header = lines[0];
 		const availCol = header.indexOf("Avail");
-		const useCol = header.indexOf("Use%");
 		if (availCol >= 0) {
 			const result = ["Filesystem | Used | Avail | Use%"];
 			for (let i = 1; i < lines.length; i++) {

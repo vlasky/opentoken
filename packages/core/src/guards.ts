@@ -54,7 +54,8 @@ export function sanitizeFilePath(
 		};
 	}
 
-	if (!realResolved.startsWith(normalizedRoot)) {
+	const relative = path.relative(normalizedRoot, realResolved);
+	if (relative.startsWith("..") || path.isAbsolute(relative)) {
 		return {
 			safe: false,
 			resolved: "",
@@ -63,7 +64,14 @@ export function sanitizeFilePath(
 	}
 
 	// Block absolute paths
-	if (path.isAbsolute(filePath) && !filePath.startsWith(normalizedRoot)) {
+	if (path.isAbsolute(filePath)) {
+		const absoluteRelative = path.relative(normalizedRoot, filePath);
+		if (
+			!absoluteRelative.startsWith("..") &&
+			!path.isAbsolute(absoluteRelative)
+		) {
+			return { safe: true, resolved: realResolved };
+		}
 		return {
 			safe: false,
 			resolved: "",

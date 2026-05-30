@@ -12,9 +12,20 @@
         "typescript": "^5.9.3",
       },
     },
+    "packages/claude-code": {
+      "name": "@mrgray17/opentoken-claude-code",
+      "version": "2.2.0",
+      "dependencies": {
+        "@mrgray17/opentoken-cli": "workspace:*",
+        "@mrgray17/opentoken-core": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/bun": "^1.3.14",
+      },
+    },
     "packages/cli": {
       "name": "@mrgray17/opentoken-cli",
-      "version": "2.0.0",
+      "version": "2.2.0",
       "bin": {
         "opentoken": "./src/cli.ts",
       },
@@ -28,7 +39,7 @@
     },
     "packages/core": {
       "name": "@mrgray17/opentoken-core",
-      "version": "2.0.0",
+      "version": "2.2.0",
       "dependencies": {
         "@opencode-ai/sdk": "^1.15.5",
       },
@@ -39,7 +50,7 @@
     },
     "packages/mcp": {
       "name": "@mrgray17/opentoken-mcp",
-      "version": "1.0.0",
+      "version": "2.2.0",
       "bin": {
         "@mrgray17/opentoken-mcp": "./src/server.ts",
       },
@@ -53,7 +64,7 @@
     },
     "packages/opencode": {
       "name": "@mrgray17/opentoken",
-      "version": "2.0.2",
+      "version": "2.2.0",
       "dependencies": {
         "@opencode-ai/plugin": "^1.15.5",
         "@opentui/core": "^0.2.14",
@@ -153,6 +164,8 @@
     "@jridgewell/trace-mapping": ["@jridgewell/trace-mapping@0.3.31", "", { "dependencies": { "@jridgewell/resolve-uri": "^3.1.0", "@jridgewell/sourcemap-codec": "^1.4.14" } }, "sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw=="],
 
     "@mrgray17/opentoken": ["@mrgray17/opentoken@workspace:packages/opencode"],
+
+    "@mrgray17/opentoken-claude-code": ["@mrgray17/opentoken-claude-code@workspace:packages/claude-code"],
 
     "@mrgray17/opentoken-cli": ["@mrgray17/opentoken-cli@workspace:packages/cli"],
 

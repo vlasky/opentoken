@@ -71,6 +71,13 @@ describe("sanitizeFilePath", () => {
 		expect(result.reason).toContain("Path traversal");
 	});
 
+	it("blocks sibling paths that only share the root prefix", () => {
+		const sibling = `${tmpDir}-sibling`;
+		const result = sanitizeFilePath(sibling, tmpDir);
+		expect(result.safe).toBe(false);
+		expect(result.reason).toContain("Path traversal");
+	});
+
 	it("detects symlink cycles", () => {
 		const cycleDir = fs.mkdtempSync(path.join(os.tmpdir(), "opentoken-cycle-"));
 		const link1 = path.join(cycleDir, "link1");

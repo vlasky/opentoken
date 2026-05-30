@@ -24,7 +24,7 @@
 	},
 	"files": [
 		"src/**/*.ts",
-		"bin/**/*.js"
+		"bin/**/*.mjs"
 	],
 	"dependencies": {
 		"@mrgray17/opentoken-core": "^2.1.0"

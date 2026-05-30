@@ -1,0 +1,17 @@
+{
+	"description": "OpenToken compression hook for Claude Code",
+	"hooks": {
+		"PreToolUse": [
+			{
+				"matcher": "Bash",
+				"hooks": [
+					{
+						"type": "command",
+						"command": "bun \"$CLAUDE_PROJECT_DIR/node_modules/@mrgray17/opentoken-claude-code/scripts/pretool-rewrite.mjs\"",
+						"timeout": 10
+					}
+				]
+			}
+		]
+	}
+}

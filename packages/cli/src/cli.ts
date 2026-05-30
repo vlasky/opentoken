@@ -192,27 +192,35 @@ async function wrapMode(commandParts: string[]): Promise<void> {
 		process.exit(1);
 	}
 
-	for await (const chunk of childStdout) {
-		chunks.push(
-			typeof chunk === "string" ? Buffer.from(chunk) : (chunk as Buffer),
-		);
-	}
+	const drainStdout = (async () => {
+		for await (const chunk of childStdout) {
+			chunks.push(
+				typeof chunk === "string" ? Buffer.from(chunk) : (chunk as Buffer),
+			);
+		}
+	})();
 
-	for await (const chunk of childStderr) {
-		process.stderr.write(
-			typeof chunk === "string"
-				? chunk
-				: new TextDecoder().decode(chunk as Buffer),
-		);
-	}
+	const drainStderr = (async () => {
+		for await (const chunk of childStderr) {
+			process.stderr.write(
+				typeof chunk === "string"
+					? chunk
+					: new TextDecoder().decode(chunk as Buffer),
+			);
+		}
+	})();
 
-	const exitCode = await new Promise<number>((resolve) => {
+	const exitCode = await new Promise<number | null>((resolve, reject) => {
+		child.on("error", reject);
 		child.on("close", resolve);
 	});
+	await Promise.all([drainStdout, drainStderr]);
 
 	const stdoutBuf = Buffer.concat(chunks).toString("utf8");
 
-	if (stdoutBuf.length === 0) return;
+	if (stdoutBuf.length === 0) {
+		process.exit(exitCode ?? 0);
+	}
 
 	const { output } = await transformToolOutput("bash", fullCommand, stdoutBuf, {
 		enableMetrics: false,

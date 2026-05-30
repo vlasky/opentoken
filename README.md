@@ -2,7 +2,7 @@
 
 **Token-compression engine for AI coding agents.**
 Intercepts tool output and strips noise before it reaches the LLM.
-Works with OpenCode, Cursor, Windsurf, Claude Desktop, VS Code Copilot, and any MCP-compatible IDE.
+Works with OpenCode, Claude Code, Cursor, Windsurf, Claude Desktop, VS Code Copilot, and any MCP-compatible IDE.
 
 ```
 $ git diff HEAD~1                    2,114 tokens of raw diff noise
@@ -19,7 +19,7 @@ $ opentoken wrap "git diff HEAD~1"     407 tokens -- 81% reduction
   <a href="https://github.com/MrGray17/opentoken/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-334155" /></a>
 </p>
 <p align="center">
-  <b>431 tests</b> &middot; <b>35 stages</b> &middot; <b>10 command families</b> &middot; <b>zero regressions</b>
+  <b>Automated tests</b> &middot; <b>35 stages</b> &middot; <b>10 command families</b> &middot; <b>Claude Code hooks + MCP</b>
 </p>
 ---
 ## Why This Exists
@@ -151,6 +151,29 @@ See [AGENTS.md](https://github.com/MrGray17/opentoken/blob/main/AGENTS.md) for a
 
 ---
 
+## Claude Code Integration
+
+Claude Code works best with both the hook and MCP:
+
+- **Hook (transparent, Bash only).** A `PreToolUse` hook rewrites each Bash command to run through `opentoken wrap`, so Claude Code captures already-compressed output. Claude Code's `PostToolUse` hooks cannot rewrite tool output, so the built-in `Read`, `Grep`, and `Glob` tools (which have no command to wrap) are not compressed by the hook — use the MCP `opentoken_transform` tool for those.
+- **MCP (explicit, any tool).** Adds `opentoken_transform`, `opentoken_rewrite`, and `opentoken_stats` as tools the model can call.
+
+For transparent Bash compression, install the hook package and run the installer. It safely **merges** into your Claude Code settings (preserving existing hooks and permissions, backing up to `.bak`) — no manual editing:
+
+```bash
+bun add -d @mrgray17/opentoken-claude-code
+bunx opentoken-claude-code install            # project-local (./.claude/settings.json)
+bunx opentoken-claude-code install --global   # all projects (~/.claude/settings.json)
+```
+
+Use `opentoken-claude-code status` to check it, and `opentoken-claude-code uninstall` to remove it. The hook respects your existing Claude Code Bash permission rules (deny / ask / allow). Set `OPENTOKEN_CLAUDE_HOOKS=0` to temporarily disable it.
+
+Add the MCP server:
+
+```bash
+claude mcp add --transport stdio opentoken -- opentoken-mcp
+```
+
 ## IDE Integration (MCP)
 
 **Cursor / Windsurf** -- add to `~/.cursor/mcp.json`:
@@ -160,6 +183,12 @@ See [AGENTS.md](https://github.com/MrGray17/opentoken/blob/main/AGENTS.md) for a
 ```
 
 **Claude Desktop** -- add to `~/.claude/claude_desktop_config.json`:
+
+```json
+{ "mcpServers": { "opentoken": { "command": "opentoken-mcp" } } }
+```
+
+**Claude Code MCP only** -- add to `.mcp.json` or run `claude mcp add`:
 
 ```json
 { "mcpServers": { "opentoken": { "command": "opentoken-mcp" } } }
@@ -197,6 +226,7 @@ opentoken/
     cli/src/                 # CLI binary (~260 lines)
     mcp/src/                 # MCP JSON-RPC server
     opencode/src/            # OpenCode plugin adapter (~140 lines)
+    claude-code/             # Claude Code hook scripts and MCP examples
   tests/
     core/                    # 21 files, 425 tests
     opencode/                # 1 file, 6 tests

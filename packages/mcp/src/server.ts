@@ -73,7 +73,7 @@ async function handleToolCall(
 ): Promise<{ content: Array<{ type: string; text: string }> }> {
 	switch (name) {
 		case "opentoken_transform": {
-			const { output } = transformToolOutput(
+			const { output } = await transformToolOutput(
 				args.tool as string,
 				(args.command as string) ?? "",
 				args.output as string,
@@ -82,14 +82,15 @@ async function handleToolCall(
 			return { content: [{ type: "text", text: output }] };
 		}
 		case "opentoken_rewrite": {
-			const result = rewriteCommand(args.command as string);
+			const command = (args.command as string) ?? "";
+			const rewritten = rewriteCommand(command);
 			return {
 				content: [
 					{
 						type: "text",
 						text: JSON.stringify({
-							modifiedArgs: result.modifiedArgs,
-							blocked: result.blocked,
+							command: rewritten,
+							changed: rewritten !== command,
 						}),
 					},
 				],

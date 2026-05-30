@@ -1,0 +1,7 @@
+{
+	"mcpServers": {
+		"opentoken": {
+			"command": "opentoken-mcp"
+		}
+	}
+}

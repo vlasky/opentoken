@@ -1,0 +1,25 @@
+{
+	"name": "@mrgray17/opentoken-claude-code",
+	"version": "2.2.0",
+	"description": "Claude Code hooks and MCP configuration for OpenToken",
+	"type": "module",
+	"license": "MIT",
+	"bin": {
+		"opentoken-claude-code": "./bin/opentoken-claude-code.mjs"
+	},
+	"files": [
+		"bin/**/*.mjs",
+		"scripts/**/*.mjs",
+		"hooks/hooks.json",
+		"mcp.json",
+		"settings.example.json",
+		"README.md"
+	],
+	"dependencies": {
+		"@mrgray17/opentoken-cli": "workspace:*",
+		"@mrgray17/opentoken-core": "workspace:*"
+	},
+	"devDependencies": {
+		"@types/bun": "^1.3.14"
+	}
+}
