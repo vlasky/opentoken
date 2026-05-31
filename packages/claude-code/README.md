@@ -59,6 +59,11 @@ it is reachable.
   to `opentoken wrap <command>`, preserving command-family detection.
 - **Commands with shell operators** (`npm test 2>&1`, `a && b`) are wrapped via
   `opentoken wrap bash -c '…'`; content-based folding still applies.
+- **No marker-based compression.** The hook sets `OPENTOKEN_NO_DICT=1`, which
+  disables the dictionary layer (LTSC/LZW/abbreviation). Those replace text with
+  `$N` markers that the model would have to decode (and could leak into tool
+  calls) for little real token savings on typical output. Lossless noise removal
+  and legible folding still run.
 - **Permissions are respected.** The hook reads your Claude Code Bash
   permission rules and mirrors them: denied commands pass through untouched (so
   Claude Code's native deny applies), already-allowed commands are auto-allowed,

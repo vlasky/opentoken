@@ -218,6 +218,13 @@ function singleQuote(s) {
 	return `'${s.replaceAll("'", `'\\''`)}'`;
 }
 
+// Disable the marker-based dictionary compression (LTSC/LZW/abbreviation) for
+// the Claude Code path: a benchmark showed it adds little real token savings on
+// typical tool output while forcing the model to decode `$N` legends (and risking
+// the markers leaking into tool calls). The lossless noise removal and legible
+// folding still run.
+const NO_DICT = "OPENTOKEN_NO_DICT=1 ";
+
 function buildWrapped(otk, command, rewriteCommand) {
 	if (needsShell(command)) {
 		// Compound command or shell builtin: wrap the original verbatim through a
@@ -225,11 +232,11 @@ function buildWrapped(otk, command, rewriteCommand) {
 		// rules (`<cmd> --silent`) would attach flags to the wrong sub-command
 		// across operators, so it is skipped here. The `wrap` pipeline still
 		// compresses the output; content routing folds diffs/logs regardless.
-		return `${otk} wrap bash -c ${singleQuote(command)}`;
+		return `${NO_DICT}${otk} wrap bash -c ${singleQuote(command)}`;
 	}
 	// Simple command: apply quiet-flag rewrites, then prefix directly so family
 	// detection sees the real command.
-	return `${otk} wrap ${rewriteCommand(command)}`;
+	return `${NO_DICT}${otk} wrap ${rewriteCommand(command)}`;
 }
 
 // ─── main ───

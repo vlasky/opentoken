@@ -58,6 +58,15 @@ describe("Claude Code PreToolUse hook", () => {
 		expect(cmd).not.toContain("bash -c");
 	});
 
+	it("disables the dictionary layer via OPENTOKEN_NO_DICT on the wrapped command", () => {
+		const simple = JSON.parse(runHook(bashEvent("git diff")).stdout)
+			.hookSpecificOutput.updatedInput.command;
+		expect(simple).toContain("OPENTOKEN_NO_DICT=1");
+		const complex = JSON.parse(runHook(bashEvent("npm test 2>&1")).stdout)
+			.hookSpecificOutput.updatedInput.command;
+		expect(complex).toContain("OPENTOKEN_NO_DICT=1");
+	});
+
 	it("folds quiet-flag rewrites into the wrapped command", () => {
 		const result = runHook(bashEvent("npm install react"));
 		const cmd = JSON.parse(result.stdout).hookSpecificOutput.updatedInput.command;

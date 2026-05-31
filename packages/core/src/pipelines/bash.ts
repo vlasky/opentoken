@@ -47,19 +47,30 @@ import {
 // Shared compression tail: reversible → auto-escalate → abbreviate → LTSC/LZW,
 // closed by the conservative filter (which also guards against data loss).
 // `comparand` is the baseline the conservative filter compares against.
+//
+// The "dictionary" stages (reversible, abbreviate, LTSC, LZW) replace content
+// with `$N` markers plus a legend the reader must mentally expand. When
+// OPENTOKEN_NO_DICT=1 they are skipped, leaving only the lossless noise removal
+// and legible folding. The Claude Code hook sets this so the model never has to
+// decode markers (and can't leak them into tool calls). Other harnesses are
+// unaffected unless they opt in.
 async function finalizeCompression(
 	sessionID: string,
 	family: string,
 	comparand: string,
 	filtered: string,
 ): Promise<string> {
-	const reversible = await safeStageAsync(
-		"applyReversibleCompression",
-		() => applyReversibleCompression(sessionID, filtered),
-		{ result: filtered, compressed: false },
-	);
-	if (reversible.compressed) {
-		filtered = reversible.result;
+	const noDict = process.env.OPENTOKEN_NO_DICT === "1";
+
+	if (!noDict) {
+		const reversible = await safeStageAsync(
+			"applyReversibleCompression",
+			() => applyReversibleCompression(sessionID, filtered),
+			{ result: filtered, compressed: false },
+		);
+		if (reversible.compressed) {
+			filtered = reversible.result;
+		}
 	}
 
 	filtered = safeStage(
@@ -68,32 +79,34 @@ async function finalizeCompression(
 		filtered,
 	);
 
-	// Semantic abbreviation — replace long repeated identifiers with $N$ markers
-	filtered = safeStage(
-		"abbreviateIdentifiers",
-		() => abbreviateIdentifiers(sessionID, filtered),
-		filtered,
-	);
+	if (!noDict) {
+		// Semantic abbreviation — replace long repeated identifiers with $N markers
+		filtered = safeStage(
+			"abbreviateIdentifiers",
+			() => abbreviateIdentifiers(sessionID, filtered),
+			filtered,
+		);
 
-	// LTSC: Lossless Token Sequence Compression (LZ77-style, 18-27% savings)
-	// Only run if autotune says it's worthwhile for this command family
-	if (isStageWorthwhile(family)) {
-		const ltsc = safeStage("compressLTSC", () => compressLTSC(filtered), {
-			compressed: false,
-			result: filtered,
-			savings: 0,
-		});
-		if (ltsc.compressed) filtered = ltsc.result;
-	}
+		// LTSC: Lossless Token Sequence Compression (LZ77-style, 18-27% savings)
+		// Only run if autotune says it's worthwhile for this command family
+		if (isStageWorthwhile(family)) {
+			const ltsc = safeStage("compressLTSC", () => compressLTSC(filtered), {
+				compressed: false,
+				result: filtered,
+				savings: 0,
+			});
+			if (ltsc.compressed) filtered = ltsc.result;
+		}
 
-	// LZW: Token substitution for repetitive content (stack traces, error logs)
-	if (isStageWorthwhile(family, 0.05)) {
-		const lzw = safeStage("compressLZW", () => compressLZW(filtered), {
-			compressed: false,
-			result: filtered,
-			savings: 0,
-		});
-		if (lzw.compressed) filtered = lzw.result;
+		// LZW: Token substitution for repetitive content (stack traces, error logs)
+		if (isStageWorthwhile(family, 0.05)) {
+			const lzw = safeStage("compressLZW", () => compressLZW(filtered), {
+				compressed: false,
+				result: filtered,
+				savings: 0,
+			});
+			if (lzw.compressed) filtered = lzw.result;
+		}
 	}
 
 	return conservativeFilter(comparand, filtered);
