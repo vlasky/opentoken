@@ -104,7 +104,40 @@ export function hasErrors(output: string): boolean {
 	return errorPatterns.some((p) => p.test(output));
 }
 
+// Data-loss guard: a stage must not report "nothing here" when the input
+// clearly had content. Token accounting can't catch this — "(no matches)" has
+// fewer tokens than 26 real grep hits, so a token-only check happily keeps it.
+//
+// The guard is deliberately narrow: it fires only when the result is a short
+// "emptiness claim" (e.g. "(no matches)", "0 results") AND the input had many
+// distinct lines. This spares legitimate aggressive summarization — a filter
+// turning 50 npm lines into "Added 150 packages" is not claiming emptiness, so
+// it is left alone — while rejecting a filter that loses real content to a
+// nothing-found sentinel.
+const NEAR_EMPTY_CHARS = 32;
+const MIN_DISTINCT_LINES = 5;
+const EMPTINESS_CLAIM =
+	/^\(?\s*(no\b|none\b|empty\b|nothing\b|0\s+(matches|results|files|entries|rows|lines))/i;
+
+export function isSuspiciousDataLoss(
+	original: string,
+	filtered: string,
+): boolean {
+	const f = filtered.trim();
+	if (f.length >= NEAR_EMPTY_CHARS) return false;
+	if (!EMPTINESS_CLAIM.test(f)) return false;
+	const distinct = new Set<string>();
+	for (const line of original.split("\n")) {
+		const t = line.trim();
+		if (t.length > 0) distinct.add(t);
+	}
+	return distinct.size >= MIN_DISTINCT_LINES;
+}
+
 export function conservativeFilter(original: string, filtered: string): string {
+	// Correctness over token savings: never emit a near-empty result when the
+	// input carried many distinct lines (almost certainly destroyed data).
+	if (isSuspiciousDataLoss(original, filtered)) return original;
 	const origTokens = safeEstimateTokens(original);
 	const filtTokens = safeEstimateTokens(filtered);
 	if (filtTokens >= origTokens) return original;

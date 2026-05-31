@@ -43,6 +43,62 @@ import {
 	stripThinkingBlocks,
 	suppressOversized,
 } from "./shared";
+
+// Shared compression tail: reversible → auto-escalate → abbreviate → LTSC/LZW,
+// closed by the conservative filter (which also guards against data loss).
+// `comparand` is the baseline the conservative filter compares against.
+async function finalizeCompression(
+	sessionID: string,
+	family: string,
+	comparand: string,
+	filtered: string,
+): Promise<string> {
+	const reversible = await safeStageAsync(
+		"applyReversibleCompression",
+		() => applyReversibleCompression(sessionID, filtered),
+		{ result: filtered, compressed: false },
+	);
+	if (reversible.compressed) {
+		filtered = reversible.result;
+	}
+
+	filtered = safeStage(
+		"applyAutoEscalation",
+		() => applyAutoEscalation(filtered),
+		filtered,
+	);
+
+	// Semantic abbreviation — replace long repeated identifiers with $N$ markers
+	filtered = safeStage(
+		"abbreviateIdentifiers",
+		() => abbreviateIdentifiers(sessionID, filtered),
+		filtered,
+	);
+
+	// LTSC: Lossless Token Sequence Compression (LZ77-style, 18-27% savings)
+	// Only run if autotune says it's worthwhile for this command family
+	if (isStageWorthwhile(family)) {
+		const ltsc = safeStage("compressLTSC", () => compressLTSC(filtered), {
+			compressed: false,
+			result: filtered,
+			savings: 0,
+		});
+		if (ltsc.compressed) filtered = ltsc.result;
+	}
+
+	// LZW: Token substitution for repetitive content (stack traces, error logs)
+	if (isStageWorthwhile(family, 0.05)) {
+		const lzw = safeStage("compressLZW", () => compressLZW(filtered), {
+			compressed: false,
+			result: filtered,
+			savings: 0,
+		});
+		if (lzw.compressed) filtered = lzw.result;
+	}
+
+	return conservativeFilter(comparand, filtered);
+}
+
 export async function applyBashFilter(
 	sessionID: string,
 	command: string,
@@ -74,6 +130,25 @@ export async function applyBashFilter(
 	output = safeStage("stripAnsi", () => stripAnsi(output), output);
 
 	if (shouldSkipFilter(output)) return output;
+
+	const family = safeStage(
+		"detectFamily",
+		() => detectFamily(command),
+		"generic",
+	);
+
+	// Route grep/rg/ag/ack output to the grep filter BEFORE the generic
+	// normalizers run. Those stages (notably groupByDirectory and shortenPaths)
+	// rewrite `file:line:content` lines, which destroys the structure filterGrep
+	// parses — collapsing real matches to "(no matches)". Parse first.
+	if (/\b(grep|rg|ag|ack)\b/.test(command)) {
+		const grepFiltered = safeStage(
+			"filterGrep",
+			() => filterGrep(output),
+			output,
+		);
+		return finalizeCompression(sessionID, family, output, grepFiltered);
+	}
 
 	output = safeStage(
 		"cleanWhitespaceAndNulls",
@@ -149,163 +224,107 @@ export async function applyBashFilter(
 		if (sampled.sampled) output = sampled.result;
 	}
 
-	const family = safeStage(
-		"detectFamily",
-		() => detectFamily(command),
-		"generic",
-	);
+	// grep/rg/ag/ack is handled and returned before the normalizers above.
 	let filtered: string;
-
-	// Route bash grep/rg/ag/ack commands to grep filter instead of family filter
-	const isGrepCommand = /\b(grep|rg|ag|ack)\b/.test(command);
-	if (isGrepCommand) {
-		filtered = safeStage("filterGrep", () => filterGrep(output), output);
-	} else {
-		switch (family) {
-			case "git":
-				filtered = safeStage(
-					"filterGitOutput",
-					() => filterGitOutput(command, output),
-					output,
-				);
-				break;
-			case "npm":
-				filtered = safeStage(
-					"filterNpmOutput",
-					() => filterNpmOutput(command, output),
-					output,
-				);
-				break;
-			case "cargo":
-				filtered = safeStage(
-					"filterCargoOutput",
-					() => filterCargoOutput(command, output),
-					output,
-				);
-				break;
-			case "test":
-				filtered = safeStage(
-					"filterTestOutput",
-					() => filterTestOutput(command, output),
-					output,
-				);
-				break;
-			case "fs": {
-				// Route `cat <source_file>` through the read pipeline for skeleton extraction.
-				// Guard: no flags, pipes, redirects, globs, or multiple files — only cat <path>.
-				const catReadMatch = command.match(
-					/^\s*cat\s+(?!-)([^\s|&;>'<*"]+)\s*$/,
-				);
-				if (catReadMatch) {
-					const catPath = catReadMatch[1];
-					// Cross-tool dedup: if read tool already showed this file, point to it
-					const cachedRead = getCachedRead(sessionID, catPath);
-					if (cachedRead !== null) {
-						filtered = `[Contents of ${catPath} already shown via read — see earlier result]`;
-						break;
-					}
-					const ext = `.${catPath.split(".").pop()?.toLowerCase() || ""}`;
-					if (SOURCE_EXTENSIONS.includes(ext)) {
-						filtered = safeStage(
-							"filterRead",
-							() => filterRead(catPath, output),
-							output,
-						);
-						// Cache the skeleton for future cat/read dedup
-						setCachedRead(sessionID, catPath, filtered);
-						break;
-					}
+	switch (family) {
+		case "git":
+			filtered = safeStage(
+				"filterGitOutput",
+				() => filterGitOutput(command, output),
+				output,
+			);
+			break;
+		case "npm":
+			filtered = safeStage(
+				"filterNpmOutput",
+				() => filterNpmOutput(command, output),
+				output,
+			);
+			break;
+		case "cargo":
+			filtered = safeStage(
+				"filterCargoOutput",
+				() => filterCargoOutput(command, output),
+				output,
+			);
+			break;
+		case "test":
+			filtered = safeStage(
+				"filterTestOutput",
+				() => filterTestOutput(command, output),
+				output,
+			);
+			break;
+		case "fs": {
+			// Route `cat <source_file>` through the read pipeline for skeleton extraction.
+			// Guard: no flags, pipes, redirects, globs, or multiple files — only cat <path>.
+			const catReadMatch = command.match(/^\s*cat\s+(?!-)([^\s|&;>'<*"]+)\s*$/);
+			if (catReadMatch) {
+				const catPath = catReadMatch[1];
+				// Cross-tool dedup: if read tool already showed this file, point to it
+				const cachedRead = getCachedRead(sessionID, catPath);
+				if (cachedRead !== null) {
+					filtered = `[Contents of ${catPath} already shown via read — see earlier result]`;
+					break;
 				}
-				// Route read-only fs tools through generic for better head+tail preservation.
-				// Cat (non-source), wc, du, df benefit from generic's head(20)+tail(20) over fs's prefix-only truncation.
-				// Diff, sort, uniq stay in fs — their output is order-sensitive and needs full visibility.
-				if (/^\s*(wc|du|df)\s/.test(`${command} `)) {
+				const ext = `.${catPath.split(".").pop()?.toLowerCase() || ""}`;
+				if (SOURCE_EXTENSIONS.includes(ext)) {
 					filtered = safeStage(
-						"filterGeneric",
-						() => filterGeneric(output),
+						"filterRead",
+						() => filterRead(catPath, output),
 						output,
 					);
-				} else {
-					filtered = safeStage(
-						"filterFsOutput",
-						() => filterFsOutput(command, output),
-						output,
-					);
+					// Cache the skeleton for future cat/read dedup
+					setCachedRead(sessionID, catPath, filtered);
+					break;
 				}
-				break;
 			}
-			case "docker":
-				filtered = safeStage(
-					"filterDockerOutput",
-					() => filterDockerOutput(command, output),
-					output,
-				);
-				break;
-			case "pip":
-				filtered = safeStage(
-					"filterPipOutput",
-					() => filterPipOutput(command, output),
-					output,
-				);
-				break;
-			case "make":
-				filtered = safeStage(
-					"filterMakeOutput",
-					() => filterMakeOutput(command, output),
-					output,
-				);
-				break;
-			default:
+			// Route read-only fs tools through generic for better head+tail preservation.
+			// Cat (non-source), wc, du, df benefit from generic's head(20)+tail(20) over fs's prefix-only truncation.
+			// Diff, sort, uniq stay in fs — their output is order-sensitive and needs full visibility.
+			if (/^\s*(wc|du|df)\s/.test(`${command} `)) {
 				filtered = safeStage(
 					"filterGeneric",
 					() => filterGeneric(output),
 					output,
 				);
+			} else {
+				filtered = safeStage(
+					"filterFsOutput",
+					() => filterFsOutput(command, output),
+					output,
+				);
+			}
+			break;
 		}
+		case "docker":
+			filtered = safeStage(
+				"filterDockerOutput",
+				() => filterDockerOutput(command, output),
+				output,
+			);
+			break;
+		case "pip":
+			filtered = safeStage(
+				"filterPipOutput",
+				() => filterPipOutput(command, output),
+				output,
+			);
+			break;
+		case "make":
+			filtered = safeStage(
+				"filterMakeOutput",
+				() => filterMakeOutput(command, output),
+				output,
+			);
+			break;
+		default:
+			filtered = safeStage(
+				"filterGeneric",
+				() => filterGeneric(output),
+				output,
+			);
 	}
 
-	const reversible = await safeStageAsync(
-		"applyReversibleCompression",
-		() => applyReversibleCompression(sessionID, filtered),
-		{ result: filtered, compressed: false },
-	);
-	if (reversible.compressed) {
-		filtered = reversible.result;
-	}
-
-	filtered = safeStage(
-		"applyAutoEscalation",
-		() => applyAutoEscalation(filtered),
-		filtered,
-	);
-
-	// Semantic abbreviation — replace long repeated identifiers with $N$ markers
-	filtered = safeStage(
-		"abbreviateIdentifiers",
-		() => abbreviateIdentifiers(sessionID, filtered),
-		filtered,
-	);
-
-	// LTSC: Lossless Token Sequence Compression (LZ77-style, 18-27% savings)
-	// Only run if autotune says it's worthwhile for this command family
-	if (isStageWorthwhile(family)) {
-		const ltsc = safeStage("compressLTSC", () => compressLTSC(filtered), {
-			compressed: false,
-			result: filtered,
-			savings: 0,
-		});
-		if (ltsc.compressed) filtered = ltsc.result;
-	}
-
-	// LZW: Token substitution for repetitive content (stack traces, error logs)
-	if (isStageWorthwhile(family, 0.05)) {
-		const lzw = safeStage("compressLZW", () => compressLZW(filtered), {
-			compressed: false,
-			result: filtered,
-			savings: 0,
-		});
-		if (lzw.compressed) filtered = lzw.result;
-	}
-
-	return conservativeFilter(output, filtered);
+	return finalizeCompression(sessionID, family, output, filtered);
 }

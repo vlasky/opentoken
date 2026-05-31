@@ -124,6 +124,7 @@ export { estimateTokens } from "./utils/tokens";
 export {
 	conservativeFilter,
 	hasErrors,
+	isSuspiciousDataLoss,
 	routeContent,
 	safeEstimateTokens,
 	safeStage,
