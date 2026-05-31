@@ -63,12 +63,38 @@ it is reachable.
   permission rules and mirrors them: denied commands pass through untouched (so
   Claude Code's native deny applies), already-allowed commands are auto-allowed,
   and everything else follows the normal permission prompt.
-- **Skipped:** heredocs, already-wrapped commands, trivial commands (`cd`,
+- **Skipped:** heredocs, command substitution (`$(…)`, backticks — unsound to
+  mirror permissions through), already-wrapped commands, trivial commands (`cd`,
   `pwd`, `echo`, …), and streaming/interactive commands (`tail -f`, `watch`,
-  `npm run dev`, editors) — the latter because `wrap` buffers stdout until the
-  child exits.
+  `npm run dev`, editors).
 
 Set `OPENTOKEN_CLAUDE_HOOKS=0` to disable the hook without removing configuration.
+
+### Limitation: output is buffered until the command exits
+
+`opentoken wrap` runs the command, collects **all** of its stdout, compresses
+it, and only then emits the result. stderr streams through live; compressed
+stdout appears at the end. Two consequences for long-running commands:
+
+- **Timeouts lose output.** If Claude Code's Bash timeout kills a command
+  mid-run, the wrapper is killed before it emits anything, so you get no
+  compressed stdout — whereas an unwrapped command would have surfaced partial
+  output. This bites slow one-shot commands that are *also* high-volume (large
+  builds, full test suites) — exactly the ones you most want compressed.
+- **No live progress.** Output that would normally stream (progress bars, test
+  ticks) is withheld until completion.
+
+Mitigations:
+
+- Raise the Bash timeout for slow commands via the `BASH_DEFAULT_TIMEOUT_MS`
+  (default 120000) and `BASH_MAX_TIMEOUT_MS` (default 600000) environment
+  variables.
+- Run the command as a background task by passing `run_in_background: true` to
+  the Bash tool (manage background tasks with `/tasks`).
+- Set `OPENTOKEN_CLAUDE_HOOKS=0` to bypass wrapping for a session.
+
+Known streaming/interactive commands are skipped automatically (see above), but
+a slow one-shot build cannot be detected ahead of time, so it is still wrapped.
 
 ## MCP
 
