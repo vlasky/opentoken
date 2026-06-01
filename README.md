@@ -73,8 +73,7 @@ Pipeline routing selects a specialized chain of 10-20 stages based on command co
 - **Line noise normalization** -- replaces timestamps, PIDs, elapsed times with static placeholders
 
 ### Advanced Compression
-- **LTSC** -- Lossless Token Sequence Compression (LZ77-sliding window), 18-27%
-- **LZW token substitution** -- high-frequency substrings replaced with single-token markers, 20-40% on repetitive output
+- **LTSC / LZW dictionary coding** -- repeated spans replaced with `$N` markers + a legend, on highly repetitive output (logs, traces). O(n) seed-and-extend finder; every result is verified to decompress exactly (bails to the original otherwise). Narrowed to repetitive content and skipped on the Claude Code hook path, where markers would burden the model.
 - **Progressive disclosure** -- summary first, full output on demand via offloaded temp files
 - **Reversible compression** -- semantic abbreviation with rewind for full recovery
 - **TOON conversion** -- transforms JSON arrays into tabular format

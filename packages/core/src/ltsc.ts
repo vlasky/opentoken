@@ -1,14 +1,16 @@
-// LTSC — Lossless Token Sequence Compression (aggressive)
-// Based on Harvill et al. ([PID]), arXiv:2506.00307
-// LZ77-style: finds repeated sequences, replaces with meta-tokens,
-// prepends dictionary. Fully lossless — zero quality impact.
-// Extended for aggressive matching: longer windows, multi-byte,
-// cross-line sequences, improved savings estimation.
+// LTSC — Lossless Token Sequence Compression
+// LZ77-style: finds repeated sequences, replaces with meta-tokens, prepends a
+// dictionary. Fully lossless. Repeated-span discovery uses the shared O(n)
+// seed-and-extend finder (utils/repeats); previously it enumerated every
+// substring of every length (O(n·window)) — ~seconds on larger inputs.
 
-const MIN_SUBSTRING_LEN = 1;
+import { findRepeatedSpans, hasSufficientRepetition } from "./utils/repeats";
+
+const SEED_LEN = 8; // narrow to meaningful repeats; sub-marker spans never pay off
 const MAX_DICT_SIZE = 80;
 const MIN_REPEATS = 2;
 const MAX_WINDOW = 512;
+const MAX_CANDIDATES = 400; // bound the non-overlap selection work
 const MAX_INPUT_LEN = 50_000; // Skip compression for very large outputs
 
 interface Repeat {
@@ -17,42 +19,23 @@ interface Repeat {
 	savings?: number;
 }
 
-// Find all repeated substrings within sliding window
+// Find repeated substrings worth dictionary-coding (fast seed-and-extend).
 function findRepeatedSubstrings(text: string): Repeat[] {
-	const seen = new Map<string, number[]>();
-	const length = text.length;
-
-	// Extended window: 2 to 128 chars, stepping by 1
-	for (
-		let len = MIN_SUBSTRING_LEN;
-		len <= Math.min(MAX_WINDOW, length);
-		len++
-	) {
-		for (let i = 0; i <= length - len; i++) {
-			const sub = text.slice(i, i + len);
-			// Skip if contains newlines (breaks meta-token format)
-			if (sub.includes("\n")) continue;
-			const existing = seen.get(sub);
-			if (existing) {
-				existing.push(i);
-			} else {
-				seen.set(sub, [i]);
-			}
-		}
-	}
+	const spans = findRepeatedSpans(text, {
+		seedLen: SEED_LEN,
+		maxLen: MAX_WINDOW,
+		minRepeats: MIN_REPEATS,
+		maxCandidates: MAX_CANDIDATES,
+	});
 
 	const repeats: Repeat[] = [];
-	for (const [str, positions] of seen) {
-		if (positions.length >= MIN_REPEATS) {
-			const metaTokenOverhead = 3;
-			const dictEntryOverhead = 3 + str.length;
-			const originalCost = positions.length * str.length;
-			const replacementCost = positions.length * metaTokenOverhead;
-			const savings = originalCost - replacementCost - dictEntryOverhead;
-			if (savings > 0) {
-				repeats.push({ str, positions, savings });
-			}
-		}
+	for (const { str, positions } of spans) {
+		const metaTokenOverhead = 3;
+		const dictEntryOverhead = 3 + str.length;
+		const originalCost = positions.length * str.length;
+		const replacementCost = positions.length * metaTokenOverhead;
+		const savings = originalCost - replacementCost - dictEntryOverhead;
+		if (savings > 0) repeats.push({ str, positions, savings });
 	}
 
 	repeats.sort((a, b) => (b.savings ?? 0) - (a.savings ?? 0));
@@ -114,6 +97,11 @@ export function compressLTSC(text: string): {
 		return { compressed: false, result: text, savings: 0 };
 	}
 
+	// Narrow: bail fast on input without enough repetitive structure to benefit.
+	if (!hasSufficientRepetition(text, SEED_LEN)) {
+		return { compressed: false, result: text, savings: 0 };
+	}
+
 	// Stage 1: Find repeated substrings
 	const repeats = findRepeatedSubstrings(text);
 	if (repeats.length === 0) {
@@ -157,6 +145,15 @@ export function compressLTSC(text: string): {
 
 	// Only return compressed if it's actually smaller
 	if (savings <= 0) {
+		return { compressed: false, result: text, savings: 0 };
+	}
+
+	// Losslessness guarantee: a dictionary entry or marker can collide with the
+	// content (e.g. a stored span containing the "," dict delimiter, or a literal
+	// "$N" in the input). Verify the result decompresses exactly; if not, bail to
+	// the original rather than emit corrupted output. Makes "lossless" true by
+	// construction instead of by assumption.
+	if (decompressLTSC(result) !== text) {
 		return { compressed: false, result: text, savings: 0 };
 	}
 

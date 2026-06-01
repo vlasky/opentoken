@@ -3,116 +3,89 @@
 // prepends a lightweight dictionary. Fully lossless, zero quality risk.
 // 20-40% savings on repetitive output (stack traces, error logs, test output).
 
+import {
+	type FoundRepeat,
+	findRepeatedSpans,
+	hasSufficientRepetition,
+} from "./utils/repeats";
+
 const MIN_SUBSTRING_LEN = 8; // Minimum repeated substring length (chars)
 const MAX_DICT_SIZE = 30; // Maximum dictionary entries
 const MIN_OCCURRENCES = 2; // Minimum times a substring must appear
-const MAX_INPUT_LEN = 50_000; // Guard: skip O(n²) search for oversized inputs
+const MAX_WINDOW = 120; // Max substring length to dictionary-code
+const MAX_CANDIDATES = 400;
+const MAX_INPUT_LEN = 50_000; // Guard: skip the scan for oversized inputs
 
 interface DictEntry {
 	id: string;
 	original: string;
+	positions: number[];
 	count: number;
 	savings: number;
 }
 
-// Find all repeated substrings of sufficient length and frequency
+function entrySavings(len: number, occurrences: number): number {
+	const markerLen = 2; // $1, $2, …
+	const dictEntryLen = 4 + len; // "$N = str\n"
+	return occurrences * len - (occurrences * markerLen + dictEntryLen);
+}
+
+// Find repeated substrings worth dictionary-coding (fast seed-and-extend).
 function findRepeatedSubstrings(text: string): DictEntry[] {
-	const candidates = new Map<string, number[]>();
+	const spans: FoundRepeat[] = findRepeatedSpans(text, {
+		seedLen: MIN_SUBSTRING_LEN,
+		maxLen: MAX_WINDOW,
+		minRepeats: MIN_OCCURRENCES,
+		maxCandidates: MAX_CANDIDATES,
+	});
 
-	// Sliding window: find all substrings of MIN_SUBSTRING_LEN to 120 chars
-	for (let len = MIN_SUBSTRING_LEN; len <= 120; len++) {
-		for (let i = 0; i <= text.length - len; i++) {
-			const sub = text.slice(i, i + len);
-
-			// Skip substrings with newlines (breaks marker format)
-			if (sub.includes("\n")) continue;
-
-			// Skip substrings that are just whitespace or common punctuation
-			if (/^[\s\-_=]+$/.test(sub)) continue;
-
-			if (candidates.has(sub)) {
-				candidates.get(sub)?.push(i);
-			} else {
-				candidates.set(sub, [i]);
-			}
-		}
-	}
-
-	// Filter to substrings that appear enough times
 	const entries: DictEntry[] = [];
-
-	for (const [str, positions] of candidates) {
-		if (positions.length < MIN_OCCURRENCES) continue;
-
-		// Calculate savings: (occurrences - 1) * str.length - (occurrences * marker_len) - dict_entry_len
-		const markerLen = 2; // $1, $2, etc.
-		const dictEntryLen = 4 + str.length; // "$N = str\n"
-		const originalCost = positions.length * str.length;
-		const replacementCost = positions.length * markerLen + dictEntryLen;
-		const savings = originalCost - replacementCost;
-
+	for (const { str, positions } of spans) {
+		if (/^[\s\-_=]+$/.test(str)) continue; // skip whitespace/punctuation runs
+		const savings = entrySavings(str.length, positions.length);
 		if (savings > 0) {
 			entries.push({
 				id: "",
 				original: str,
+				positions,
 				count: positions.length,
 				savings,
 			});
 		}
 	}
-
-	// Sort by savings descending
 	entries.sort((a, b) => b.savings - a.savings);
-
 	return entries;
 }
 
-// Select non-overlapping entries (greedy, highest savings first)
-function selectNonOverlapping(entries: DictEntry[], text: string): DictEntry[] {
+// Select non-overlapping entries (greedy, highest savings first). Uses the
+// occurrence positions from the finder — no O(n²) re-scan of the text.
+function selectNonOverlapping(entries: DictEntry[]): DictEntry[] {
 	const selected: DictEntry[] = [];
-	const usedPositions = new Set<number>();
+	const used = new Set<number>();
 
 	for (const entry of entries) {
 		if (selected.length >= MAX_DICT_SIZE) break;
-
-		// Find all non-overlapping occurrences of this substring
+		const len = entry.original.length;
 		const nonOverlapping: number[] = [];
 
-		for (let i = 0; i < text.length - entry.original.length + 1; i++) {
-			if (usedPositions.has(i)) continue;
-
+		for (const pos of entry.positions) {
 			let overlaps = false;
-			for (let j = 0; j < entry.original.length; j++) {
-				if (usedPositions.has(i + j)) {
+			for (let j = 0; j < len; j++) {
+				if (used.has(pos + j)) {
 					overlaps = true;
 					break;
 				}
 			}
-
-			if (
-				!overlaps &&
-				text.slice(i, i + entry.original.length) === entry.original
-			) {
-				nonOverlapping.push(i);
-			}
+			if (!overlaps) nonOverlapping.push(pos);
 		}
 
 		if (nonOverlapping.length >= MIN_OCCURRENCES) {
-			// Mark positions as used
-			for (const pos of nonOverlapping) {
-				for (let j = 0; j < entry.original.length; j++) {
-					usedPositions.add(pos + j);
-				}
-			}
-
-			// Recalculate savings with actual occurrence count
-			const markerLen = 2;
-			const dictEntryLen = 4 + entry.original.length;
-			const originalCost = nonOverlapping.length * entry.original.length;
-			const replacementCost = nonOverlapping.length * markerLen + dictEntryLen;
-			const savings = originalCost - replacementCost;
-
+			const savings = entrySavings(len, nonOverlapping.length);
 			if (savings > 0) {
+				for (const pos of nonOverlapping) {
+					for (let j = 0; j < len; j++) used.add(pos + j);
+				}
+				entry.positions = nonOverlapping;
 				entry.count = nonOverlapping.length;
 				entry.savings = savings;
 				selected.push(entry);
@@ -121,34 +94,6 @@ function selectNonOverlapping(entries: DictEntry[], text: string): DictEntry[] {
 	}
 
 	return selected;
-}
-
-// Fast O(n) pre-check: sample ~500 positions for repeated substrings at MIN_SUBSTRING_LEN.
-// If fewer than 5% of sampled non-newline substrings repeat, the input lacks sufficient
-// repetitive structure for LZW to produce savings — skip the O(n²) scan entirely.
-function hasSufficientRepetition(text: string): boolean {
-	const maxSamples = 500;
-	const maxPos = text.length - MIN_SUBSTRING_LEN;
-	if (maxPos <= 0) return false;
-
-	const step = Math.max(1, Math.floor(maxPos / maxSamples));
-	const seen = new Set<string>();
-	let repeated = 0;
-	let total = 0;
-
-	for (let i = 0; i <= maxPos; i += step) {
-		const sub = text.slice(i, i + MIN_SUBSTRING_LEN);
-		if (sub.includes("\n")) continue;
-		if (/^[\s\-_=]+$/.test(sub)) continue;
-		total++;
-		if (seen.has(sub)) repeated++;
-		else seen.add(sub);
-	}
-
-	// Deem repetitive if ≥5% of sampled positions have a repeated substring.
-	// 5% is a very low bar — for 500 samples, only 25 need to repeat.
-	// This ensures we rarely skip genuinely compressible content.
-	return total > 0 && repeated / total >= 0.03;
 }
 
 export function compressLZW(text: string): {
@@ -162,8 +107,8 @@ export function compressLZW(text: string): {
 		return { compressed: false, result: text, savings: 0 };
 	}
 
-	// Fast O(n) pre-check: skip the O(n²) scan for non-compressible input
-	if (!hasSufficientRepetition(text)) {
+	// Narrow: skip the scan for non-compressible input
+	if (!hasSufficientRepetition(text, MIN_SUBSTRING_LEN)) {
 		return { compressed: false, result: text, savings: 0 };
 	}
 
@@ -174,7 +119,7 @@ export function compressLZW(text: string): {
 	}
 
 	// Select non-overlapping entries
-	const selected = selectNonOverlapping(entries, text);
+	const selected = selectNonOverlapping(entries);
 	if (selected.length === 0) {
 		return { compressed: false, result: text, savings: 0 };
 	}
@@ -189,19 +134,10 @@ export function compressLZW(text: string): {
 		dict.push(`${id} = ${selected[i].original}`);
 	}
 
-	// Build replacement list (sorted by position descending for safe replacement)
+	// Build replacements directly from the selected (non-overlapping) positions.
 	for (const entry of selected) {
-		let searchPos = 0;
-		while (searchPos < text.length - entry.original.length + 1) {
-			const idx = text.indexOf(entry.original, searchPos);
-			if (idx === -1) break;
-
-			replacements.push({
-				pos: idx,
-				len: entry.original.length,
-				marker: entry.id,
-			});
-			searchPos = idx + entry.original.length;
+		for (const pos of entry.positions) {
+			replacements.push({ pos, len: entry.original.length, marker: entry.id });
 		}
 	}
 
@@ -224,6 +160,12 @@ export function compressLZW(text: string): {
 
 	// Only return compressed if it's actually smaller
 	if (savings <= 0) {
+		return { compressed: false, result: text, savings: 0 };
+	}
+
+	// Losslessness guarantee: if a marker/dictionary entry collides with the
+	// content, bail to the original rather than emit corrupted output.
+	if (decompressLZW(result) !== text) {
 		return { compressed: false, result: text, savings: 0 };
 	}
 
